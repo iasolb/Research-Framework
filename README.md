@@ -10,10 +10,40 @@ No special installation required beyond standard dependencies:
 pip install pandas numpy
 ```
 
-Place `research_handler.py` in your project directory and import:
+For running the example workflows:
 
-```python
-from research_handler import ResearchHandler
+```bash
+pip install statsmodels scikit-learn scipy
+```
+
+For running the tests:
+
+```bash
+pip install pytest
+```
+
+Or install everything at once from the requirements file:
+
+```bash
+pip install -r requirements.txt
+```
+
+## Repository Structure
+
+```
+Research-Framework/
+├── ResearchHandler.py     # Core data handling class
+├── transforms.py          # Reusable single- and multi-column transforms
+├── requirements.txt       # Dependencies (core + optional)
+├── LICENSE                # MIT
+├── .gitignore
+├── README.md
+├── tests/
+│   └── test_handler.py    # pytest suite with synthetic data
+└── examples/
+    ├── ols_mincer.py              # OLS Mincer wage equation
+    ├── random_forest_churn.py     # Random forest churn prediction
+    └── heckman_selection.py       # Heckman two-step selection model
 ```
 
 ## Quick Start
@@ -21,8 +51,9 @@ from research_handler import ResearchHandler
 ```python
 import numpy as np
 from research_handler import ResearchHandler
+from transforms import mean_center, log_transform, z_score
 
-# Define a cleaning function that takes a raw DataFrame and returns a cleaned one
+# Define a cleaning function
 def clean(df):
     df.columns = df.columns.str.lower().str.strip()
     df = df.dropna(subset=["income", "age", "education"])
@@ -32,11 +63,11 @@ def clean(df):
 # Initialize — input file must be CSV
 rh = ResearchHandler("survey_data.csv", clean)
 
-# Log-transform income, center age around its mean
-rh.normalize_and_attach("income", np.log, "log_income")
-rh.normalize_and_attach("age", lambda s: s - s.mean(), "age_centered")
+# Transform with named functions from transforms.py
+rh.normalize_and_attach("income", log_transform, "log_income")
+rh.normalize_and_attach("age", mean_center, "age_centered")
 
-# Create a working subset of employed adults
+# Create a working subset
 rh.create_subset(lambda df: (df["age"] >= 18) & (df["employed"] == 1))
 
 # Set up variables from the subset
@@ -72,13 +103,8 @@ The cleaning function receives the raw `pd.DataFrame` from `read_csv` and must r
 Creates a working subset of the full dataset based on a boolean condition.
 
 ```python
-# Simple filter
 rh.create_subset(lambda df: df["age"] > 30)
-
-# Multi-condition filter
 rh.create_subset(lambda df: (df["income"] > 20000) & (df["employed"] == 1))
-
-# Filter by category membership
 rh.create_subset(lambda df: df["country"].isin(["US", "UK", "CA"]))
 ```
 
@@ -92,7 +118,7 @@ rh.reset_subset()
 
 ### `set_dependent(col, full=True)`
 
-Sets the dependent (outcome) variable. Pull from the full dataset by default, or from the subset with `full=False`.
+Sets the dependent (outcome) variable.
 
 ```python
 rh.set_dependent("log_income")
@@ -138,11 +164,10 @@ y = rh.get_y()
 Attaches a precomputed Series to the full dataset or subset.
 
 ```python
-# Attach a squared term
-rh.attach("age_sq", rh.data["age"] ** 2)
+from transforms import square
 
-# Attach to subset instead
-rh.attach("age_sq", rh.subset["age"] ** 2, to_full=False)
+rh.attach("age_sq", square(rh.data["age"]))
+rh.attach("age_sq", square(rh.subset["age"]), to_full=False)
 ```
 
 ### `normalize_and_attach(source_col, normalizing_function, new_colname, full=True)`
@@ -150,20 +175,13 @@ rh.attach("age_sq", rh.subset["age"] ** 2, to_full=False)
 Applies a single-column transformation and attaches the result.
 
 ```python
-# Log transform
-rh.normalize_and_attach("income", np.log, "log_income")
+from transforms import log_transform, z_score, mean_center, min_max_scale
 
-# Z-score standardization
-rh.normalize_and_attach("gpa", lambda s: (s - s.mean()) / s.std(), "gpa_z")
-
-# Mean-centering
-rh.normalize_and_attach("age", lambda s: s - s.mean(), "age_centered")
-
-# Min-max scaling
-rh.normalize_and_attach("score", lambda s: (s - s.min()) / (s.max() - s.min()), "score_scaled")
-
-# Apply to subset
-rh.normalize_and_attach("wage", np.log, "log_wage", full=False)
+rh.normalize_and_attach("income", log_transform, "log_income")
+rh.normalize_and_attach("gpa", z_score, "gpa_z")
+rh.normalize_and_attach("age", mean_center, "age_centered")
+rh.normalize_and_attach("score", min_max_scale, "score_scaled")
+rh.normalize_and_attach("wage", log_transform, "log_wage", full=False)
 ```
 
 ### `apply_and_attach(source_cols, func, new_colname, full=True)`
@@ -171,31 +189,14 @@ rh.normalize_and_attach("wage", np.log, "log_wage", full=False)
 Applies a multi-column transformation and attaches the result. The function receives a DataFrame subset of the specified columns.
 
 ```python
-# Interaction term
-rh.apply_and_attach(
-    ["education", "experience"],
-    lambda df: df["education"] * df["experience"],
-    "edu_x_exp"
-)
+from transforms import interaction, row_mean, row_sum, safe_ratio
 
-# Revenue calculation
-rh.apply_and_attach(
-    ["price", "quantity"],
-    lambda df: df["price"] * df["quantity"],
-    "revenue"
-)
-
-# Row-wise average across test scores
-rh.apply_and_attach(
-    ["math", "reading", "science"],
-    lambda df: df.mean(axis=1),
-    "avg_score"
-)
-
-# Ratio with safe division
+rh.apply_and_attach(["education", "experience"], interaction, "edu_x_exp")
+rh.apply_and_attach(["math", "reading", "science"], row_mean, "avg_score")
+rh.apply_and_attach(["q1", "q2", "q3", "q4"], row_sum, "annual_total")
 rh.apply_and_attach(
     ["revenue", "visits"],
-    lambda df: df["revenue"] / df["visits"].replace(0, np.nan),
+    safe_ratio("revenue", "visits"),
     "rev_per_visit",
     full=False
 )
@@ -209,7 +210,51 @@ Clears the dependent, independents, and controls so you can set up a new specifi
 rh.clear_caches()
 ```
 
+## Transforms Reference
+
+`transforms.py` provides reusable functions so you don't have to write lambdas inline every time.
+
+### Single-column transforms (Series → Series)
+
+For use with `normalize_and_attach`:
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `mean_center` | `x - mean(x)` | `rh.normalize_and_attach("age", mean_center, "age_c")` |
+| `z_score` | `(x - mean) / std` | `rh.normalize_and_attach("gpa", z_score, "gpa_z")` |
+| `min_max_scale` | Scale to [0, 1] | `rh.normalize_and_attach("score", min_max_scale, "score_01")` |
+| `log_transform` | `ln(x)` | `rh.normalize_and_attach("income", log_transform, "log_inc")` |
+| `log1p_transform` | `ln(1 + x)`, safe for zeros | `rh.normalize_and_attach("tickets", log1p_transform, "log_tix")` |
+| `square` | `x²` | `rh.normalize_and_attach("exp", square, "exp_sq")` |
+| `rank_transform` | Replace with rank | `rh.normalize_and_attach("score", rank_transform, "score_rank")` |
+
+### Factory transforms (return a callable)
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `winsorize(lower, upper)` | Clip at quantiles | `rh.normalize_and_attach("income", winsorize(0.01, 0.99), "inc_wins")` |
+| `demean_by_group(group_col)` | Subtract group means | `rh.normalize_and_attach("income", demean_by_group(rh.data["industry"]), "inc_dm")` |
+
+### Multi-column transforms (DataFrame → Series)
+
+For use with `apply_and_attach`:
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `interaction` | Product of first two columns | `rh.apply_and_attach(["edu", "exp"], interaction, "edu_x_exp")` |
+| `row_mean` | Row-wise average | `rh.apply_and_attach(["m", "r", "s"], row_mean, "avg")` |
+| `row_sum` | Row-wise sum | `rh.apply_and_attach(["q1", "q2"], row_sum, "total")` |
+| `safe_ratio(num, denom)` | Division, 0 → NaN | `rh.apply_and_attach(["rev", "vis"], safe_ratio("rev", "vis"), "rpv")` |
+
 ## Example Workflows
+
+All examples in `examples/` generate their own synthetic data so you can clone and run immediately:
+
+```bash
+python examples/ols_mincer.py
+python examples/random_forest_churn.py
+python examples/heckman_selection.py
+```
 
 ### OLS Regression with statsmodels
 
@@ -218,7 +263,8 @@ A standard Mincer wage equation with log wages, centered experience, and a squar
 ```python
 import numpy as np
 import statsmodels.api as sm
-from research_handler import ResearchHandler
+from ResearchHandler import ResearchHandler
+from transforms import log_transform, mean_center, square
 
 def clean(df):
     df.columns = df.columns.str.lower()
@@ -228,9 +274,9 @@ def clean(df):
 rh = ResearchHandler("labor_data.csv", clean)
 
 # Transform variables
-rh.normalize_and_attach("wage", np.log, "log_wage")
-rh.normalize_and_attach("experience", lambda s: s - s.mean(), "exp_centered")
-rh.attach("exp_centered_sq", rh.data["exp_centered"] ** 2)
+rh.normalize_and_attach("wage", log_transform, "log_wage")
+rh.normalize_and_attach("experience", mean_center, "exp_centered")
+rh.attach("exp_centered_sq", square(rh.data["exp_centered"]))
 
 # Specification 1: Full sample
 rh.set_dependent("log_wage")
@@ -266,7 +312,8 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
-from research_handler import ResearchHandler
+from ResearchHandler import ResearchHandler
+from transforms import z_score, log1p_transform, safe_ratio
 
 def clean(df):
     df.columns = df.columns.str.lower()
@@ -280,17 +327,19 @@ rh = ResearchHandler("customer_data.csv", clean)
 # Feature engineering
 rh.apply_and_attach(
     ["revenue", "visits"],
-    lambda df: df["revenue"] / df["visits"].replace(0, np.nan),
+    safe_ratio("revenue", "visits"),
     "rev_per_visit"
 )
-rh.normalize_and_attach("tenure", lambda s: (s - s.mean()) / s.std(), "tenure_z")
-rh.normalize_and_attach("support_tickets", np.log1p, "log_tickets")
+rh.normalize_and_attach("tenure", z_score, "tenure_z")
+rh.normalize_and_attach("support_tickets", log1p_transform, "log_tickets")
 
 rh.set_dependent("churned")
 rh.add_independents("rev_per_visit", "tenure_z", "log_tickets")
 rh.add_controls("gender_code", "region_code")
 
 X = rh.get_X()
+assert X is not None, "No independent variables set"
+X = X.fillna(0)
 y = rh.get_y()
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -309,7 +358,8 @@ Correct for selection bias in observed wages using the inverse Mills ratio.
 import numpy as np
 import statsmodels.api as sm
 from scipy.stats import norm
-from research_handler import ResearchHandler
+from ResearchHandler import ResearchHandler
+from transforms import mean_center, log_transform
 
 def clean(df):
     df.columns = df.columns.str.lower()
@@ -318,8 +368,8 @@ def clean(df):
 
 rh = ResearchHandler("labor_survey.csv", clean)
 
-# Center age for the full sample before splitting
-rh.normalize_and_attach("age", lambda s: s - s.mean(), "age_centered")
+# Center age on the full sample
+rh.normalize_and_attach("age", mean_center, "age_centered")
 
 # Step 1: Selection equation (probit) on full sample
 rh.set_dependent("employed")
@@ -339,7 +389,7 @@ rh.attach("imr", imr)
 rh.clear_caches()
 rh.create_subset(lambda df: df["employed"] == 1)
 
-rh.normalize_and_attach("wage", np.log, "log_wage", full=False)
+rh.normalize_and_attach("wage", log_transform, "log_wage", full=False)
 
 rh.set_dependent("log_wage", full=False)
 rh.add_independents("age_centered", "education", full=False)
@@ -352,41 +402,21 @@ ols = sm.OLS(y_outcome, X_outcome).fit()
 print(ols.summary())
 ```
 
-### Logistic Regression with Interaction Terms
+## Running Tests
 
-Modeling treatment effects with centered covariates and interaction terms.
+From the repo root:
 
-```python
-import numpy as np
-import statsmodels.api as sm
-from research_handler import ResearchHandler
+```bash
+pytest tests/test_handler.py -v
+```
 
-def clean(df):
-    df.columns = df.columns.str.lower()
-    return df.dropna(subset=["outcome", "treatment", "age", "dosage"])
+The test suite covers the full `ResearchHandler` class (init, subsetting, variable setting, attach/transform, guard clauses) and every function in `transforms.py`, all using synthetic data with no external dependencies.
 
-rh = ResearchHandler("trial_data.csv", clean)
+Run a specific test class or method:
 
-# Center continuous variables to reduce multicollinearity in interactions
-rh.normalize_and_attach("age", lambda s: s - s.mean(), "age_c")
-rh.normalize_and_attach("dosage", lambda s: s - s.mean(), "dosage_c")
-
-# Interaction: treatment x centered dosage
-rh.apply_and_attach(
-    ["treatment", "dosage_c"],
-    lambda df: df["treatment"] * df["dosage_c"],
-    "treat_x_dose"
-)
-
-rh.set_dependent("outcome")
-rh.add_independents("treatment", "dosage_c", "treat_x_dose")
-rh.add_controls("age_c")
-
-X = sm.add_constant(rh.get_X())
-y = rh.get_y()
-
-logit = sm.Logit(y, X).fit(disp=0)
-print(logit.summary())
+```bash
+pytest tests/test_handler.py::TestSubset -v
+pytest tests/test_handler.py::TestTransforms::test_z_score -v
 ```
 
 ## Design Notes
