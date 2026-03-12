@@ -81,7 +81,8 @@ def main():
     # Transform variables
     rh.normalize_and_attach("wage", log_transform, "log_wage")
     rh.normalize_and_attach("experience", mean_center, "exp_centered")
-    rh.attach("exp_centered_sq", square(rh.data["exp_centered"]))
+    if rh.data:
+        rh.attach("exp_centered_sq", square(rh.data["exp_centered"]))
 
     # Specification 1: Full sample
     print("\n" + "=" * 60)

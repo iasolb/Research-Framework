@@ -103,7 +103,7 @@ def main():
     print(probit.summary())
 
     # Compute and attach inverse Mills ratio
-    imr = norm.pdf(probit.fittedvalues) / norm.cdf(probit.fittedvalues)
+    imr = pd.Series(norm.pdf(probit.fittedvalues) / norm.cdf(probit.fittedvalues))
     rh.attach("imr", imr)
 
     # -----------------------------------------------------------------------

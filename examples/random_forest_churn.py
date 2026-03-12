@@ -94,7 +94,9 @@ def main():
     rh.add_independents("rev_per_visit", "tenure_z", "log_tickets")
     rh.add_controls("gender_code", "region_code")
 
-    X = rh.get_X().fillna(0)  # handle NaN from safe_ratio division
+    X = rh.get_X()
+    assert X is not None, "No independent variables set"
+    X = X.fillna(0)
     y = rh.get_y()
 
     # Train/test split
