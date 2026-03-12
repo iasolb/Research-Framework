@@ -298,16 +298,16 @@ class TestTransforms:
 
     def test_log_transform(self, s):
         result = log_transform(s)
-        np.testing.assert_array_almost_equal(result.values, np.log(s.values))
+        np.testing.assert_array_almost_equal(result.to_numpy(), np.log(s.to_numpy()))
 
     def test_log1p_transform(self):
         s = pd.Series([0, 1, 2, 3])
         result = log1p_transform(s)
-        np.testing.assert_array_almost_equal(result.values, np.log1p(s.values))
+        np.testing.assert_array_almost_equal(result.to_numpy(), np.log1p(s.to_numpy()))
 
     def test_square(self, s):
         result = square(s)
-        np.testing.assert_array_almost_equal(result.values, s.values**2)
+        np.testing.assert_array_almost_equal(result.to_numpy(), s.to_numpy() ** 2)
 
     def test_rank_transform(self, s):
         result = rank_transform(s)
@@ -329,22 +329,22 @@ class TestTransforms:
         result = demean_by_group(groups)(s)
         # A group: mean=15, so 10-15=-5, 20-15=5
         # B group: mean=35, so 30-35=-5, 40-35=5
-        np.testing.assert_array_almost_equal(result.values, [-5, 5, -5, 5])
+        np.testing.assert_array_almost_equal(result.to_numpy(), [-5, 5, -5, 5])
 
     def test_interaction(self):
         df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
         result = interaction(df)
-        np.testing.assert_array_equal(result.values, [4, 10, 18])
+        np.testing.assert_array_equal(result.to_numpy(), [4, 10, 18])
 
     def test_row_mean(self):
         df = pd.DataFrame({"a": [1, 2], "b": [3, 4], "c": [5, 6]})
         result = row_mean(df)
-        np.testing.assert_array_almost_equal(result.values, [3.0, 4.0])
+        np.testing.assert_array_almost_equal(result.to_numpy(), [3.0, 4.0])
 
     def test_row_sum(self):
         df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
         result = row_sum(df)
-        np.testing.assert_array_equal(result.values, [4, 6])
+        np.testing.assert_array_equal(result.to_numpy(), [4, 6])
 
     def test_safe_ratio(self):
         df = pd.DataFrame({"rev": [100, 200, 300], "visits": [10, 0, 30]})

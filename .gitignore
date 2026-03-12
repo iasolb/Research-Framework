@@ -10,7 +10,7 @@ build/
 venv/
 env/
 .venv/
-
+tests/__pycache__
 # Jupyter
 .ipynb_checkpoints/
 
