@@ -36,5 +36,5 @@ Thumbs.db
 .pytest_cache/
 
 # new transforms
-simulation.py
+
 src/

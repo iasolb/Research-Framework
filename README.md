@@ -1,6 +1,6 @@
-# ResearchHandler
+# Research Framework
 
-A lightweight pandas-based data handling framework for research workflows. Manages full datasets and working subsets, tracks dependent/independent/control variables, and provides clean interfaces for transforming and attaching computed columns.
+A lightweight pandas-based framework for research workflows. Manages datasets and working subsets, tracks dependent/independent/control variables, provides clean interfaces for transforming columns, and includes a full Monte Carlo simulation module for uncertainty analysis.
 
 ## Installation
 
@@ -10,10 +10,16 @@ No special installation required beyond standard dependencies:
 pip install pandas numpy
 ```
 
+For the simulation module:
+
+```bash
+pip install scipy matplotlib
+```
+
 For running the example workflows:
 
 ```bash
-pip install statsmodels scikit-learn scipy
+pip install statsmodels scikit-learn
 ```
 
 For running the tests:
@@ -34,6 +40,7 @@ pip install -r requirements.txt
 Research-Framework/
 ├── ResearchHandler.py     # Core data handling class
 ├── transforms.py          # Reusable single- and multi-column transforms
+├── simulation.py          # Monte Carlo simulation module
 ├── requirements.txt       # Dependencies (core + optional)
 ├── LICENSE                # MIT
 ├── .gitignore
@@ -41,16 +48,19 @@ Research-Framework/
 ├── tests/
 │   └── test_handler.py    # pytest suite with synthetic data
 └── examples/
-    ├── ols_mincer.py              # OLS Mincer wage equation
-    ├── random_forest_churn.py     # Random forest churn prediction
-    └── heckman_selection.py       # Heckman two-step selection model
+    ├── data/
+    │   └── startup_portfolio.csv      # Sample portfolio dataset
+    ├── ols_mincer.py                  # OLS Mincer wage equation
+    ├── random_forest_churn.py         # Random forest churn prediction
+    ├── heckman_selection.py           # Heckman two-step selection model
+    └── monte_carlo_portfolio.py       # Monte Carlo portfolio valuation
 ```
 
 ## Quick Start
 
 ```python
 import numpy as np
-from research_handler import ResearchHandler
+from ResearchHandler import ResearchHandler
 from transforms import mean_center, log_transform, z_score
 
 # Define a cleaning function
@@ -246,6 +256,286 @@ For use with `apply_and_attach`:
 | `row_sum` | Row-wise sum | `rh.apply_and_attach(["q1", "q2"], row_sum, "total")` |
 | `safe_ratio(num, denom)` | Division, 0 → NaN | `rh.apply_and_attach(["rev", "vis"], safe_ratio("rev", "vis"), "rpv")` |
 
+---
+
+## Simulation Module
+
+`simulation.py` provides a Monte Carlo simulation framework for running models under uncertainty. It integrates with `ResearchHandler` by fitting distributions from observed data, or can be used standalone with manually specified distributions.
+
+### Simulation Quick Start
+
+```python
+from simulation import Simulation, DistributionSpec
+
+sim = Simulation(
+    variables=[
+        DistributionSpec("revenue", "normal", {"mean": 1_000_000, "std": 200_000}),
+        DistributionSpec("cost",    "uniform", {"low": 400_000, "high": 700_000}),
+    ],
+    model=lambda row: row["revenue"] - row["cost"],
+    n_iterations=10_000,
+    seed=42,
+)
+
+result = sim.run()
+print(f"Mean:   ${result.mean:,.0f}")
+print(f"95% CI: [${result.ci_lower:,.0f}, ${result.ci_upper:,.0f}]")
+```
+
+### Using with ResearchHandler
+
+The simulation module can fit distributions directly from data managed by `ResearchHandler`, letting you simulate counterfactuals against your observed data:
+
+```python
+from ResearchHandler import ResearchHandler
+from simulation import InputManager, DistributionSpec, ModelFunction, MonteCarloEngine
+
+rh = ResearchHandler("portfolio.csv", clean)
+
+# Fit distributions from your actual data
+mgr = InputManager()
+mgr.fit_from_data(rh.data, ["growth_rate", "churn_rate"], dist_type="normal")
+
+# Infer the correlation structure from observed data
+mgr.infer_correlation_from_data(rh.data)
+
+# Add a hypothetical policy variable with a manual distribution
+mgr.add_variable(DistributionSpec("subsidy", "uniform", {"low": 0, "high": 50_000}))
+
+# Define a model and run
+model = ModelFunction(lambda row: row["growth_rate"] * 100_000 + row["subsidy"])
+engine = MonteCarloEngine(mgr, model, n_iterations=10_000, seed=42)
+result = engine.run()
+result.summarize()
+```
+
+You can also use `"empirical"` to resample directly from observed values rather than assuming a parametric form:
+
+```python
+mgr.fit_from_data(rh.data, ["stock_returns"], dist_type="empirical")
+```
+
+### Simulation API Reference
+
+#### `DistributionSpec(name, dist_type, params, empirical_data=None)`
+
+Defines an uncertain variable and its probability distribution.
+
+| `dist_type` | Required `params` |
+|-------------|-------------------|
+| `"normal"` | `{"mean": ..., "std": ...}` |
+| `"uniform"` | `{"low": ..., "high": ...}` |
+| `"lognormal"` | `{"mean": ..., "sigma": ...}` |
+| `"beta"` | `{"a": ..., "b": ...}` |
+| `"triangular"` | `{"left": ..., "mode": ..., "right": ...}` |
+| `"exponential"` | `{"scale": ...}` |
+| `"empirical"` | `empirical_data=np.array([...])` |
+
+```python
+DistributionSpec("revenue",  "normal",   {"mean": 1e6, "std": 2e5})
+DistributionSpec("cost",     "uniform",  {"low": 4e5, "high": 7e5})
+DistributionSpec("duration", "empirical", empirical_data=observed_array)
+```
+
+Validation happens on construction — missing params or unknown distribution types raise immediately.
+
+#### `InputManager`
+
+Collects uncertain variables, fits distributions from data, manages correlation, and draws samples.
+
+```python
+mgr = InputManager()
+
+# Register manually
+mgr.add_variable(DistributionSpec("x", "normal", {"mean": 0, "std": 1}))
+mgr.add_variables([...])
+mgr.remove_variable("x")
+
+# Fit from observed data
+mgr.fit_from_data(df, ["col_a", "col_b"], dist_type="normal")
+mgr.fit_from_data(df, ["col_c"], dist_type="empirical")
+
+# Correlation
+mgr.set_correlation_matrix(np.array([[1.0, 0.6], [0.6, 1.0]]))
+mgr.infer_correlation_from_data(df)
+
+# Draw samples — returns DataFrame of shape (n, n_variables)
+draws = mgr.draw(10_000, seed=42)
+```
+
+When a correlation matrix is set, draws use a Gaussian copula (Cholesky decomposition + inverse-CDF transform) to produce correlated samples with the correct marginal distributions. Without a correlation matrix, draws are independent.
+
+#### `ModelFunction(func, vectorized=False)`
+
+Wraps the user-supplied model function.
+
+```python
+# Row-wise: receives a pd.Series per iteration
+model = ModelFunction(lambda row: row["revenue"] - row["cost"])
+
+# Vectorized: receives the full DataFrame, returns an array (faster)
+model = ModelFunction(
+    lambda df: (df["revenue"] - df["cost"]).values,
+    vectorized=True,
+)
+
+# Multi-output: return a dict per row
+def multi(row):
+    profit = row["revenue"] - row["cost"]
+    return {"profit": profit, "margin": profit / row["revenue"]}
+model = ModelFunction(multi)
+```
+
+#### `MonteCarloEngine(inputs, model, n_iterations=10_000, seed=None)`
+
+Runs the simulation loop.
+
+```python
+engine = MonteCarloEngine(mgr, model, n_iterations=10_000, seed=42)
+result = engine.run()
+result = engine.run(store_draws=False)  # save memory on large runs
+```
+
+#### `SimulationResult`
+
+Container for outcomes and summary statistics.
+
+```python
+result.outcomes         # np.ndarray of model outputs
+result.draws            # DataFrame of input draws (if stored)
+
+result.summarize()      # compute and cache all stats, returns dict
+result.mean             # cached after summarize()
+result.median
+result.std
+result.ci_lower         # 95% CI by default
+result.ci_upper
+result.percentiles      # {1: ..., 5: ..., 10: ..., 25: ..., 50: ..., 75: ..., 90: ..., 95: ..., 99: ...}
+
+result.to_dataframe()   # draws + outcomes in one exportable DataFrame
+```
+
+#### `Simulation(variables, model, *, n_iterations=10_000, seed=None, ...)`
+
+Top-level facade that wires everything together.
+
+```python
+sim = Simulation(
+    variables=[
+        DistributionSpec("growth",   "normal",     {"mean": 0.4, "std": 0.15}),
+        DistributionSpec("churn",    "beta",        {"a": 2, "b": 30}),
+        DistributionSpec("multiple", "triangular",  {"left": 3, "mode": 8, "right": 20}),
+    ],
+    model=portfolio_value,
+    n_iterations=10_000,
+    seed=42,
+    correlation_matrix=corr_matrix,  # optional
+)
+
+result = sim.run()
+```
+
+The facade exposes sub-components directly:
+
+```python
+sim.engine                  # MonteCarloEngine
+sim.input_manager           # InputManager
+sim.sensitivity             # SensitivityAnalyzer
+sim.convergence             # ConvergenceDiagnostics (class reference)
+sim.plot                    # SimulationPlotter
+```
+
+### Sensitivity Analysis
+
+Accessed via `sim.sensitivity` or by constructing `SensitivityAnalyzer(engine)` directly.
+
+```python
+# Tornado: which variable drives the most swing?
+tornado = sim.sensitivity.tornado()
+# Returns DataFrame: variable, low_value, high_value, low_outcome, high_outcome, swing
+# Sorted by swing descending
+
+# One-at-a-time: sweep a single variable across its range
+oat = sim.sensitivity.one_at_a_time("revenue", n_steps=20)
+# Returns DataFrame: variable_value, outcome
+
+# Sobol indices: variance-based global sensitivity
+sobol = sim.sensitivity.sobol_indices(n_samples=5_000, seed=99)
+# Returns DataFrame: variable, S1, S1_conf — sorted by S1 descending
+```
+
+### Scenario Comparison
+
+Define named scenarios with distribution parameter overrides, then compare outcomes against baseline:
+
+```python
+from simulation import Scenario
+
+scenarios = [
+    Scenario("bull_market", overrides={
+        "multiple": {"left": 8, "mode": 15, "right": 30},
+    }),
+    Scenario("bear_market", overrides={
+        "multiple": {"left": 2, "mode": 4, "right": 8},
+        "growth": {"mean": 0.20},
+    }),
+]
+
+# Full results
+results = sim.compare_scenarios(scenarios)
+# Returns {"baseline": SimulationResult, "bull_market": ..., "bear_market": ...}
+
+# Summary table
+summary = sim.compare_scenarios_summary(scenarios)
+# Returns DataFrame: scenario, mean, median, std, ci_lower, ci_upper, min, max
+```
+
+Only the parameters that differ need to be specified — everything else stays at the base case.
+
+### Convergence Diagnostics
+
+Check whether the simulation ran enough iterations:
+
+```python
+# Quick report
+report = sim.check_convergence(result)
+# {"is_converged": True, "relative_se": 0.0051, "current_n": 10000, "suggested_n": 39261}
+
+# Detailed: running statistics
+running = ConvergenceDiagnostics.running_statistics(result.outcomes)
+# DataFrame: iteration, cumulative_mean, cumulative_std
+
+# Did it converge?
+ConvergenceDiagnostics.is_converged(result.outcomes, window=1000, tolerance=0.01)
+
+# How many iterations do I need for 0.5% precision?
+ConvergenceDiagnostics.suggest_n(result.outcomes, target_tolerance=0.005)
+
+# Snapshots at increasing N
+snapshots = sim.engine.run_convergence()
+# [SimulationResult(n=100), ..., SimulationResult(n=10000)] — all pre-summarized
+```
+
+### Plotting
+
+All plot methods return matplotlib `Figure` objects. Accessed via `sim.plot` or `SimulationPlotter` directly.
+
+```python
+fig = sim.plot.histogram(result)                        # distribution with CI shading
+fig = sim.plot.cumulative_density(result)               # empirical CDF with percentile markers
+fig = sim.plot.convergence_plot(result.outcomes)         # running mean ± SE
+fig = sim.plot.tornado_chart(tornado_data)               # sensitivity swings
+fig = sim.plot.scenario_comparison(scenario_results)     # overlaid KDE curves
+
+fig.savefig("output.png", dpi=150)
+```
+
+### Supported Distributions
+
+New distributions can be added by inserting an entry into `_DISTRIBUTION_REGISTRY` at the top of `simulation.py`. Each entry defines how to draw samples, validate parameters, fit from data, and transform through the inverse-CDF for correlated draws. No other code changes are required.
+
+---
+
 ## Example Workflows
 
 All examples in `examples/` generate their own synthetic data so you can clone and run immediately:
@@ -254,6 +544,7 @@ All examples in `examples/` generate their own synthetic data so you can clone a
 python examples/ols_mincer.py
 python examples/random_forest_churn.py
 python examples/heckman_selection.py
+python examples/monte_carlo_portfolio.py
 ```
 
 ### OLS Regression with statsmodels
@@ -402,6 +693,52 @@ ols = sm.OLS(y_outcome, X_outcome).fit()
 print(ols.summary())
 ```
 
+### Monte Carlo Portfolio Simulation
+
+Simulate a VC portfolio's 3-year value under uncertainty about growth, churn, market multiples, and discount rates. Includes sensitivity analysis and scenario comparison.
+
+```python
+from simulation import Simulation, DistributionSpec, Scenario
+
+def portfolio_value(row):
+    base_arr = 33.0 * 12
+    net_growth = row["growth_rate"] - row["churn_rate"]
+    projected_arr = base_arr * (1 + net_growth) ** 3
+    terminal = projected_arr * row["revenue_multiple"]
+    return terminal / (1 + row["discount_rate"]) ** 3
+
+sim = Simulation(
+    variables=[
+        DistributionSpec("growth_rate",       "normal",     {"mean": 0.40, "std": 0.15}),
+        DistributionSpec("churn_rate",        "beta",        {"a": 2, "b": 30}),
+        DistributionSpec("revenue_multiple",  "triangular",  {"left": 3, "mode": 8, "right": 20}),
+        DistributionSpec("discount_rate",     "normal",     {"mean": 0.12, "std": 0.03}),
+    ],
+    model=portfolio_value,
+    n_iterations=10_000,
+    seed=42,
+)
+
+result = sim.run()
+print(f"Mean: ${result.mean:,.0f}K")
+print(f"95% CI: [${result.ci_lower:,.0f}K, ${result.ci_upper:,.0f}K]")
+
+# What drives the outcome?
+tornado = sim.sensitivity.tornado()
+sobol = sim.sensitivity.sobol_indices(n_samples=2_000)
+
+# How do different market conditions change things?
+results = sim.compare_scenarios([
+    Scenario("bull", overrides={"revenue_multiple": {"left": 8, "mode": 15, "right": 30}}),
+    Scenario("bear", overrides={"revenue_multiple": {"left": 2, "mode": 4, "right": 8}}),
+])
+
+# Visualize
+sim.plot.histogram(result).savefig("distribution.png")
+sim.plot.tornado_chart(tornado).savefig("tornado.png")
+sim.plot.scenario_comparison(results).savefig("scenarios.png")
+```
+
 ## Running Tests
 
 From the repo root:
@@ -424,3 +761,5 @@ pytest tests/test_handler.py::TestTransforms::test_z_score -v
 Every method that accesses data follows the same guard pattern: check `is not None` (not bare truthiness, which raises `ValueError` on DataFrames), handle both `full=True` and `full=False` branches explicitly, and bail early with a printed message when the needed dataset isn't available.
 
 The `independents` and `controls` caches store references to Series pulled from either the full dataset or the subset. Call `clear_caches()` before setting up a new model specification to avoid mixing columns from different sources.
+
+The simulation module uses a distribution registry (`_DISTRIBUTION_REGISTRY`) that maps string names to draw functions, scipy distributions, and parameter translation maps. Adding a new distribution is a single dictionary insertion — no other code changes needed. Correlated draws use a Gaussian copula (Cholesky decomposition of the correlation matrix applied to standard normal draws, then transformed through each variable's inverse-CDF). Sensitivity analysis includes one-at-a-time sweeps, tornado charts, and variance-based Sobol indices via the Saltelli sampling scheme.
