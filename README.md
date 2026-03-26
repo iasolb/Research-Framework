@@ -70,7 +70,7 @@ def clean(df):
     df["female"] = (df["gender"] == "F").astype(int)
     return df
 
-# Initialize — input file must be CSV
+# Initialize from a CSV with a cleaning function
 rh = ResearchHandler("survey_data.csv", clean)
 
 # Transform with named functions from transforms.py
@@ -92,11 +92,12 @@ y = rh.get_y()
 
 ## API Reference
 
-### `ResearchHandler(filepath, handling_function)`
+### `ResearchHandler(source, handler=None, *, shapefile=False)`
 
-Constructor. Reads a CSV and passes the raw DataFrame through your cleaning function.
+Constructor. Accepts a CSV filepath, shapefile path, DataFrame, or GeoDataFrame. The optional `handler` function transforms the data after loading.
 
 ```python
+# From a CSV with a cleaning function
 def clean(df):
     df.columns = df.columns.str.lower()
     df["married"] = (df["marital_status"] == "married").astype(int)
@@ -104,9 +105,19 @@ def clean(df):
     return df.dropna()
 
 rh = ResearchHandler("data.csv", clean)
+
+# From a CSV without cleaning
+rh = ResearchHandler("data.csv")
+
+# From a shapefile
+rh = ResearchHandler("regions.shp", shapefile=True)
+
+# From an existing DataFrame or GeoDataFrame
+rh = ResearchHandler(existing_df)
+rh = ResearchHandler(existing_df, clean)
 ```
 
-The cleaning function receives the raw `pd.DataFrame` from `read_csv` and must return a cleaned `pd.DataFrame`. If reading or cleaning fails, `rh.data` will be `None` and all downstream methods will print a warning and return early.
+The `handler` function receives a `pd.DataFrame` (or `gpd.GeoDataFrame` for shapefiles) and must return one. If loading fails, a `TypeError` is raised. The `shapefile` parameter is keyword-only.
 
 ### `create_subset(condition)`
 
@@ -194,17 +205,17 @@ rh.normalize_and_attach("score", min_max_scale, "score_scaled")
 rh.normalize_and_attach("wage", log_transform, "log_wage", full=False)
 ```
 
-### `apply_and_attach(source_cols, func, new_colname, full=True)`
+### `calculate_and_attach(source_cols, func, new_colname, full=True)`
 
 Applies a multi-column transformation and attaches the result. The function receives a DataFrame subset of the specified columns.
 
 ```python
 from transforms import interaction, row_mean, row_sum, safe_ratio
 
-rh.apply_and_attach(["education", "experience"], interaction, "edu_x_exp")
-rh.apply_and_attach(["math", "reading", "science"], row_mean, "avg_score")
-rh.apply_and_attach(["q1", "q2", "q3", "q4"], row_sum, "annual_total")
-rh.apply_and_attach(
+rh.calculate_and_attach(["education", "experience"], interaction, "edu_x_exp")
+rh.calculate_and_attach(["math", "reading", "science"], row_mean, "avg_score")
+rh.calculate_and_attach(["q1", "q2", "q3", "q4"], row_sum, "annual_total")
+rh.calculate_and_attach(
     ["revenue", "visits"],
     safe_ratio("revenue", "visits"),
     "rev_per_visit",
@@ -247,14 +258,14 @@ For use with `normalize_and_attach`:
 
 ### Multi-column transforms (DataFrame → Series)
 
-For use with `apply_and_attach`:
+For use with `calculate_and_attach`:
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `interaction` | Product of first two columns | `rh.apply_and_attach(["edu", "exp"], interaction, "edu_x_exp")` |
-| `row_mean` | Row-wise average | `rh.apply_and_attach(["m", "r", "s"], row_mean, "avg")` |
-| `row_sum` | Row-wise sum | `rh.apply_and_attach(["q1", "q2"], row_sum, "total")` |
-| `safe_ratio(num, denom)` | Division, 0 → NaN | `rh.apply_and_attach(["rev", "vis"], safe_ratio("rev", "vis"), "rpv")` |
+| `interaction` | Product of first two columns | `rh.calculate_and_attach(["edu", "exp"], interaction, "edu_x_exp")` |
+| `row_mean` | Row-wise average | `rh.calculate_and_attach(["m", "r", "s"], row_mean, "avg")` |
+| `row_sum` | Row-wise sum | `rh.calculate_and_attach(["q1", "q2"], row_sum, "total")` |
+| `safe_ratio(num, denom)` | Division, 0 → NaN | `rh.calculate_and_attach(["rev", "vis"], safe_ratio("rev", "vis"), "rpv")` |
 
 ---
 
@@ -616,7 +627,7 @@ def clean(df):
 rh = ResearchHandler("customer_data.csv", clean)
 
 # Feature engineering
-rh.apply_and_attach(
+rh.calculate_and_attach(
     ["revenue", "visits"],
     safe_ratio("revenue", "visits"),
     "rev_per_visit"
