@@ -10,7 +10,6 @@ import scipy.stats as stats
 from typing import Optional, Callable, Any
 from dataclasses import dataclass, field
 from copy import deepcopy
-import matplotlib.pyplot as plt
 
 # ---------------------------------------------------------------------------
 # 1. INPUT SPECIFICATION
@@ -1176,258 +1175,7 @@ class ConvergenceDiagnostics:
 
 
 # ---------------------------------------------------------------------------
-# 7. VISUALIZATION HELPERS
-# ---------------------------------------------------------------------------
-
-
-class SimulationPlotter:
-    """
-    Canned plot methods.  All return matplotlib Figure objects so the
-    user can further customise or save them.
-
-    Uses matplotlib — import is deferred so the module doesn't fail
-    in headless environments unless you actually call a plot method.
-    """
-
-    @staticmethod
-    def _get_values(result: SimulationResult) -> np.ndarray:
-        """Extract a 1-D array from outcomes (handles multi-output)."""
-        if isinstance(result.outcomes, pd.DataFrame):
-            return result.outcomes.iloc[:, 0].values
-        return result.outcomes
-
-    @staticmethod
-    def histogram(
-        result: SimulationResult,
-        bins: int = 100,
-        figsize: tuple = (10, 5),
-        **kwargs,
-    ):
-        """
-        Outcome distribution histogram with CI shading and mean line.
-        """
-        import matplotlib.pyplot as plt
-
-        values = SimulationPlotter._get_values(result)
-        if result.mean is None:
-            result.summarize()
-
-        fig, ax = plt.subplots(figsize=figsize)
-        ax.hist(
-            values,
-            bins=bins,
-            density=True,
-            alpha=0.7,
-            color="#7F77DD",
-            edgecolor="white",
-            linewidth=0.3,
-            **kwargs,
-        )
-
-        # mean line
-        ax.axvline(
-            result.mean,
-            color="#E24B4A",
-            linewidth=1.5,
-            linestyle="--",
-            label=f"Mean: {result.mean:,.2f}",
-        )
-
-        # CI shading
-        if result.ci_lower is not None:
-            ax.axvspan(
-                result.ci_lower,
-                result.ci_upper,
-                alpha=0.12,
-                color="#1D9E75",
-                label=f"95% CI: [{result.ci_lower:,.2f}, {result.ci_upper:,.2f}]",
-            )
-
-        ax.set_xlabel("Outcome")
-        ax.set_ylabel("Density")
-        ax.set_title("Simulation outcome distribution")
-        ax.legend(fontsize=9)
-        fig.tight_layout()
-        return fig
-
-    @staticmethod
-    def cumulative_density(
-        result: SimulationResult,
-        figsize: tuple = (10, 5),
-        **kwargs,
-    ):
-        """Empirical CDF of outcomes."""
-        import matplotlib.pyplot as plt
-
-        values = SimulationPlotter._get_values(result)
-        sorted_vals = np.sort(values)
-        cdf = np.arange(1, len(sorted_vals) + 1) / len(sorted_vals)
-
-        fig, ax = plt.subplots(figsize=figsize)
-        ax.plot(sorted_vals, cdf, color="#534AB7", linewidth=1.2, **kwargs)
-
-        # mark key percentiles
-        if result.mean is None:
-            result.summarize()
-        for pct in [5, 25, 50, 75, 95]:
-            val = result.percentiles[pct]
-            y = pct / 100
-            ax.plot(val, y, "o", color="#D85A30", markersize=5)
-            ax.annotate(
-                f"P{pct}: {val:,.1f}",
-                (val, y),
-                textcoords="offset points",
-                xytext=(8, 0),
-                fontsize=8,
-            )
-
-        ax.set_xlabel("Outcome")
-        ax.set_ylabel("Cumulative probability")
-        ax.set_title("Empirical CDF")
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout()
-        return fig
-
-    @staticmethod
-    def convergence_plot(
-        outcomes: np.ndarray,
-        figsize: tuple = (10, 5),
-        **kwargs,
-    ):
-        """Running mean with ±1 SE band over iterations."""
-        import matplotlib.pyplot as plt
-
-        running = ConvergenceDiagnostics.running_statistics(outcomes)
-        iters = running["iteration"].values
-        means = running["cumulative_mean"].values
-        stds = running["cumulative_std"].values
-        se = stds / np.sqrt(iters)
-
-        fig, ax = plt.subplots(figsize=figsize)
-        ax.plot(iters, means, color="#534AB7", linewidth=1.2, label="Running mean")
-        ax.fill_between(
-            iters, means - se, means + se, alpha=0.2, color="#7F77DD", label="±1 SE"
-        )
-
-        # final mean reference
-        ax.axhline(
-            means[-1],
-            color="#888780",
-            linewidth=0.8,
-            linestyle=":",
-            alpha=0.6,
-            label=f"Final: {means[-1]:,.2f}",
-        )
-
-        ax.set_xlabel("Iteration")
-        ax.set_ylabel("Cumulative mean")
-        ax.set_title("Convergence")
-        ax.legend(fontsize=9)
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout()
-        return fig
-
-    @staticmethod
-    def tornado_chart(
-        tornado_data: pd.DataFrame,
-        figsize: tuple = (10, 6),
-        **kwargs,
-    ):
-        """
-        Horizontal bar chart of sensitivity swings.
-        Expects DataFrame from SensitivityAnalyzer.tornado().
-        """
-        import matplotlib.pyplot as plt
-
-        df = tornado_data.sort_values("swing", ascending=True)
-        baseline = (df["low_outcome"].values + df["high_outcome"].values) / 2
-
-        fig, ax = plt.subplots(figsize=figsize)
-        y_pos = np.arange(len(df))
-
-        # bars extend from low_outcome to high_outcome
-        lefts = df["low_outcome"].values
-        widths = df["high_outcome"].values - df["low_outcome"].values
-
-        ax.barh(
-            y_pos,
-            widths,
-            left=lefts,
-            height=0.6,
-            color="#7F77DD",
-            edgecolor="white",
-            linewidth=0.5,
-            **kwargs,
-        )
-
-        ax.set_yticks(y_pos)
-        ax.set_yticklabels(df["variable"].values)
-        ax.set_xlabel("Outcome")
-        ax.set_title("Tornado sensitivity (10th–90th percentile)")
-
-        # label swings
-        for i, (_, row) in enumerate(df.iterrows()):
-            ax.text(
-                row["high_outcome"] + (row["swing"] * 0.02),
-                i,
-                f"Δ{row['swing']:,.1f}",
-                va="center",
-                fontsize=8,
-            )
-
-        fig.tight_layout()
-        return fig
-
-    @staticmethod
-    def scenario_comparison(
-        results: dict[str, SimulationResult],
-        figsize: tuple = (10, 5),
-        **kwargs,
-    ):
-        """Overlaid KDE curves across scenarios."""
-        import matplotlib.pyplot as plt
-        from scipy.stats import gaussian_kde
-
-        colors = [
-            "#7F77DD",
-            "#1D9E75",
-            "#D85A30",
-            "#D4537E",
-            "#378ADD",
-            "#639922",
-            "#BA7517",
-            "#E24B4A",
-        ]
-
-        fig, ax = plt.subplots(figsize=figsize)
-        for i, (name, result) in enumerate(results.items()):
-            values = SimulationPlotter._get_values(result)
-            if result.mean is None:
-                result.summarize()
-
-            color = colors[i % len(colors)]
-            kde = gaussian_kde(values)
-            x = np.linspace(values.min(), values.max(), 300)
-            ax.plot(
-                x,
-                kde(x),
-                color=color,
-                linewidth=1.5,
-                label=f"{name} (μ={result.mean:,.0f})",
-                **kwargs,
-            )
-            ax.fill_between(x, kde(x), alpha=0.1, color=color)
-
-        ax.set_xlabel("Outcome")
-        ax.set_ylabel("Density")
-        ax.set_title("Scenario comparison")
-        ax.legend(fontsize=9)
-        fig.tight_layout()
-        return fig
-
-
-# ---------------------------------------------------------------------------
-# 8. TOP-LEVEL CONVENIENCE API
+# 7. TOP-LEVEL CONVENIENCE API
 # ---------------------------------------------------------------------------
 
 
@@ -1435,6 +1183,8 @@ class Simulation:
     """
     High-level facade that ties everything together.
     Intended as the primary entry point for users of the framework.
+
+    Visualization is handled by external plotter modules (see plotter.py).
 
     Example:
         sim = Simulation(
@@ -1446,8 +1196,12 @@ class Simulation:
         )
         result = sim.run()
         result.summarize()
-        sim.plot.histogram(result)
         sim.sensitivity.tornado()
+
+        # Plotting (via external plotter)
+        from plotter import SimulationPlotter
+        plot = SimulationPlotter()
+        plot.histogram(result, outcome_label="Profit ($)")
     """
 
     def __init__(
@@ -1477,7 +1231,6 @@ class Simulation:
         )
         self.sensitivity = SensitivityAnalyzer(self.engine)
         self.convergence = ConvergenceDiagnostics
-        self.plot = SimulationPlotter()
 
     def run(self) -> SimulationResult:
         """Run the simulation and return a summarized result."""
@@ -1665,7 +1418,6 @@ class Simulation:
             instance.engine = MonteCarloEngine(mgr, identity, n_iterations, seed)
             instance.sensitivity = SensitivityAnalyzer(instance.engine)
             instance.convergence = ConvergenceDiagnostics
-            instance.plot = SimulationPlotter()
         else:
             model_fn = ModelFunction(model, vectorized=vectorized)
             instance = cls.__new__(cls)
@@ -1676,6 +1428,5 @@ class Simulation:
             instance.engine = MonteCarloEngine(mgr, model_fn, n_iterations, seed)
             instance.sensitivity = SensitivityAnalyzer(instance.engine)
             instance.convergence = ConvergenceDiagnostics
-            instance.plot = SimulationPlotter()
 
         return instance
