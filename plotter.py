@@ -32,7 +32,7 @@ Usage:
 import numpy as np
 import pandas as pd
 from typing import Optional
-from simulation import ConvergenceDiagnostics
+from .simulation import ConvergenceDiagnostics
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy.stats import gaussian_kde
