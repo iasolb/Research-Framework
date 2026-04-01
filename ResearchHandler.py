@@ -1,3 +1,5 @@
+"""ResearchHandler - Supports data assignment and model customization"""
+
 import pandas as pd
 from typing import Optional, Callable, Any
 from pathlib import Path
@@ -52,6 +54,9 @@ class ModelSpec:
             f"independents={list(self.independents)}, "
             f"controls={list(self.controls)})"
         )
+
+
+# === Loader Functions Utils
 
 
 def csv_loader(filepath: Path):
