@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import geopandas as gpd
 from typing import Optional, Callable, Any
+from pathlib import Path
 from dataclasses import dataclass
 
 
@@ -54,27 +55,69 @@ class ModelSpec:
         )
 
 
+def csv_loader(filepath: Path):
+    return pd.read_csv(filepath)
+
+
+def shapefile_loader(filepath: Path):
+    return gpd.read_file(filepath)
+
+
+def txt_loader(filepath: Path):
+    return pd.read_csv(filepath, sep="\t")
+
+
+def xml_loader(filepath: Path):
+    return pd.read_xml(filepath)
+
+
+def xlsx_loader(filepath: Path):
+    return pd.read_excel(filepath)
+
+
+def parquet_loader(filepath: Path):
+    return pd.read_parquet(filepath)
+
+
+def json_loader(filepath: Path):
+    return pd.read_json(filepath)
+
+
+def pdf_loader(filepath: Path): ...
+
+
+LOADER_REG = {
+    "csv": csv_loader,
+    "shp": shapefile_loader,
+    "txt": txt_loader,
+    "xml": xml_loader,
+    "xlsx": xlsx_loader,
+    "parquet": parquet_loader,
+    "json": json_loader,
+    "pdf": pdf_loader,
+}
+
+
 class ResearchHandler:
     def __init__(
         self,
-        source: str | pd.DataFrame | gpd.GeoDataFrame,
+        source: Path | pd.DataFrame | gpd.GeoDataFrame,
         handler: Optional[Callable] = None,
-        *,
-        shapefile: bool = False,
+        data_format: Optional[str] = None,
     ):
         """
         Args:
             source: filepath (CSV or shapefile), DataFrame, or GeoDataFrame
             handler: optional transform applied after loading
-            shapefile: if True, read source path as a shapefile
+            data_format: if specified, overrides the inferred format from the file extension
 
         Examples:
             ResearchHandler("data.csv")
             ResearchHandler("data.csv", lambda df: df.dropna())
-            ResearchHandler("regions.shp", shapefile=True)
+            ResearchHandler("regions.shp", data_format="shp")
             ResearchHandler(existing_df)
         """
-        self.data = self._load(source, handler, shapefile)
+        self.data = self._load(source, handler, data_format)
         self.subset = None
         self.dependent = None
         self.independents = []
@@ -85,19 +128,41 @@ class ResearchHandler:
 
     @staticmethod
     def _load(
-        source: str | pd.DataFrame | gpd.GeoDataFrame,
+        source: Path | pd.DataFrame | gpd.GeoDataFrame,
         handler: Optional[Callable],
-        shapefile: bool,
+        data_format: Optional[str] = None,
     ) -> pd.DataFrame | gpd.GeoDataFrame:
+        if data_format and isinstance(source, Path):
+            try:
+                loader = LOADER_REG[data_format]
+                raw = loader(source)
+                if handler:
+                    try:
+                        output = handler(raw)
+                    except Exception as e:
+                        print("Error occurred in handler function")
+                        return pd.DataFrame()  # empty fallback
+                else:
+                    output = raw
+            except Exception as e:
+                print("Invalid data_format specified or error in loader function")
+                return pd.DataFrame()  # empty fallback
+
         if isinstance(source, (pd.DataFrame, gpd.GeoDataFrame)):
             raw = source
-        elif isinstance(source, str):
-            raw = gpd.read_file(source) if shapefile else pd.read_csv(source)
+            if handler:
+                try:
+                    output = handler(raw)
+                except Exception as e:
+                    print("Error occurred in handler function")
+                    return pd.DataFrame()  # empty fallback
+            else:
+                output = raw
         else:
-            raise TypeError(
-                f"source must be a filepath, DataFrame, or GeoDataFrame — got {type(source).__name__}"
-            )
-        return handler(raw) if handler else raw
+            print("Invalid source type. Must be filepath or DataFrame.")
+            output = pd.DataFrame()  # empty fallback
+
+        return output
 
     def create_subset(self, condition: Callable) -> None:
         """
